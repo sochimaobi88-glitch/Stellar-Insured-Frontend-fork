@@ -12,6 +12,7 @@ import {
 } from "@/lib/errorHandler";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import { useNotificationContext } from "@/context/NotificationContext";
+import { apiClient } from "@/lib/api-client";
 
 export interface UseErrorHandlerOptions {
   autoLog?: boolean;
@@ -76,9 +77,14 @@ export function useErrorHandler(options: UseErrorHandlerOptions = {}) {
         context: appError.context,
       });
 
+      // Show user notification for actionable errors
+      if (appError.userActionable && opts.showNotifications) {
+        addNotification(appError.message, appError.severity === 'CRITICAL' ? 'error' : 'warning');
+      }
+
       return appError;
     },
-    [trackError],
+    [trackError, addNotification, opts.showNotifications],
   );
 
   /**
@@ -126,7 +132,7 @@ export function useErrorHandler(options: UseErrorHandlerOptions = {}) {
         return null;
       }
     },
-    [handleError],
+    [handleError, trackError],
   );
 
   /**
@@ -182,7 +188,7 @@ export function useErrorHandler(options: UseErrorHandlerOptions = {}) {
         return null;
       }
     },
-    [handleError, opts.retryPolicy],
+    [handleError, opts.retryPolicy, errorHandler.getRetryPolicy],
   );
 
   /**

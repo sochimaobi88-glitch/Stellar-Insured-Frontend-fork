@@ -9,6 +9,7 @@ export type ErrorCategory =
   | 'WALLET' 
   | 'VALIDATION' 
   | 'AUTHENTICATION' 
+  | 'BLOCKCHAIN'
   | 'SYSTEM' 
   | 'UNKNOWN';
 
@@ -100,6 +101,13 @@ const DEFAULT_RETRY_POLICIES: Record<ErrorCategory, RetryPolicy> = {
     baseDelay: 1000,
     maxDelay: 3000,
     exponentialFactor: 1.5,
+    jitter: true
+  },
+  BLOCKCHAIN: {
+    maxRetries: 2,
+    baseDelay: 1500,
+    maxDelay: 10000,
+    exponentialFactor: 2,
     jitter: true
   }
 };
@@ -336,6 +344,42 @@ class ErrorHandler {
       } catch (e) {
         console.error('Failed to log error to analytics:', e);
       }
+    }
+    // Send to monitoring endpoint
+    this.sendToMonitoringEndpoint(error);
+  }
+
+  /**
+   * Send error to monitoring endpoint
+   */
+  private async sendToMonitoringEndpoint(error: AppError): Promise<void> {
+    if (!typeof window !== 'undefined') return;
+    try {
+      const monitorUrl = process.env.NEXT_PUBLIC_MONITORING_ENDPOINT;
+      if (!monitorUrl) return;
+      
+      await fetch(monitorUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          error_id: error.id,
+          category: error.category,
+          severity: error.severity,
+          message: error.message,
+          code: error.code,
+          timestamp: error.timestamp,
+          context: error.context,
+          userId: localStorage.getItem('user-id'),
+          url: window.location.pathname,
+          userAgent: navigator.userAgent
+        }),
+        credentials: 'include'
+      });
+    } catch (e) {
+      // Silently fail - monitoring should not break the app
+      console.error('Failed to send error to monitoring endpoint:', e);
     }
   }
 

@@ -1,29 +1,26 @@
-
 'use client';
-
-
-/**
- * React Error Boundary Component
- * Catches JavaScript errors anywhere in child component tree,
- * logs them, and displays a fallback UI
- */
 
 import React, { Component, ErrorInfo, ReactNode } from 'react';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { errorHandler } from '@/lib/errorHandler';
 import { analytics } from '@/lib/analytics';
+import { useNotificationContext } from '@/context/NotificationContext';
+import { useRouter } from 'next/navigation';
 
 interface Props {
   children: ReactNode;
   fallback?: ReactNode;
   onError?: (error: Error, errorInfo: ErrorInfo) => void;
+  level?: 'global' | 'route';
 }
 
 interface State {
   hasError: boolean;
   error: Error | null;
   errorInfo: ErrorInfo | null;
+  category: ErrorCategory;
+  severity: ErrorSeverity;
 }
 
 class ErrorBoundaryClass extends Component<Props, State> {
@@ -32,16 +29,19 @@ class ErrorBoundaryClass extends Component<Props, State> {
     this.state = {
       hasError: false,
       error: null,
-      errorInfo: null
+      errorInfo: null,
+      category: 'SYSTEM',
+      severity: 'HIGH'
     };
   }
 
   static getDerivedStateFromError(error: Error): State {
-    // Update state so the next render will show the fallback UI
     return {
       hasError: true,
       error,
-      errorInfo: null
+      errorInfo: null,
+      category: 'SYSTEM',
+      severity: 'HIGH'
     };
   }
 
@@ -65,34 +65,48 @@ class ErrorBoundaryClass extends Component<Props, State> {
       error,
       {
         componentStack: errorInfo.componentStack,
-        errorBoundary: true
+        errorBoundary: true,
+        level: this.props.level || 'global'
       }
     );
+
+    // Show user notification for actionable errors
+    if (appError.userActionable) {
+      const { addNotification } = useNotificationContext();
+      if (addNotification) {
+        addNotification(appError.message, appError.severity === 'CRITICAL' ? 'error' : 'warning');
+      }
+    }
+
+    // Send to monitoring endpoint
+    errorHandler.sendToMonitoringEndpoint(appError).catch(() => {
+      // Silently fail
+    });
+
+    console.error('ErrorBoundary caught an error:', error, errorInfo, appError);
 
     // Call custom error handler if provided
     if (this.props.onError) {
       this.props.onError(error, errorInfo);
     }
-
-    console.error('ErrorBoundary caught an error:', error, errorInfo, appError);
   }
 
   handleRetry = () => {
     this.setState({
       hasError: false,
       error: null,
-      errorInfo: null
+      errorInfo: null,
+      category: 'SYSTEM',
+      severity: 'HIGH'
     });
   };
 
   render() {
     if (this.state.hasError) {
-      // If fallback component is provided, use it
       if (this.props.fallback) {
         return this.props.fallback;
       }
 
-      // Default error UI
       return (
         <div className="min-h-screen flex items-center justify-center bg-slate-900 p-4">
           <Card className="max-w-2xl w-full bg-slate-800 border-slate-700">
@@ -167,7 +181,9 @@ class ErrorBoundaryClass extends Component<Props, State> {
 // Hook version for functional components that need error boundary functionality
 export function useErrorBoundary() {
   const [error, setError] = React.useState<Error | null>(null);
-  
+  const { addNotification } = useNotificationContext();
+  const router = useRouter();
+
   const handleError = React.useCallback((error: Error) => {
     setError(error);
   }, []);
@@ -208,7 +224,8 @@ export function useErrorBoundary() {
     error,
     handleError,
     resetError,
-    ErrorFallback
+    ErrorFallback,
+    router
   };
 }
 
