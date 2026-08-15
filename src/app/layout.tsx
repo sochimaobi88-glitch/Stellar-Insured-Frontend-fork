@@ -1,7 +1,7 @@
 import { Geist, Geist_Mono, Inter } from "next/font/google";
 import { Suspense } from "react";
 import "./globals.css";
-import { AuthProvider } from "@/components/auth-provider-enhanced";
+import { AuthProvider } from "@/components/auth-provider";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { AnalyticsProvider } from "@/components/analytics-provider";
 import { LoadingProvider } from "@/contexts/LoadingContext";

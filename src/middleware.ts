@@ -1,72 +1,124 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
+/**
+ * Unified Authentication Middleware
+ * 
+ * Validates session cookies and enforces route protection.
+ * Works in tandem with the unified AuthProvider on the client side.
+ */
+
 const SESSION_KEY = 'stellar_insured_session';
 
+// Public routes accessible without authentication
 const PUBLIC_ROUTES = ['/', '/about', '/signin', '/signup'];
+
+// Auth routes (redirect to dashboard if already authenticated)
 const AUTH_ROUTES = ['/signin', '/signup'];
 
-/** Validates Stellar public key format (must match G + 55 base32 chars) */
+/** Validates Stellar public key format (G + 55 base32 chars) */
 function isValidStellarAddress(address: string): boolean {
   return /^G[A-Z2-7]{55}$/.test(address);
 }
 
-/** Validates all required session fields including address format */
+/** Validates all required session fields including address format and expiry */
 function isValidSession(session: unknown): boolean {
   if (!session || typeof session !== 'object') return false;
+  
   const s = session as Record<string, unknown>;
 
-  // Required string fields
-  if (typeof s.address !== 'string' || !isValidStellarAddress(s.address)) return false;
-  if (typeof s.signedMessage !== 'string' || s.signedMessage.length === 0) return false;
-  if (typeof s.signerAddress !== 'string' || !isValidStellarAddress(s.signerAddress)) return false;
+  // Required string fields with format validation
+  if (typeof s.address !== 'string' || !isValidStellarAddress(s.address)) {
+    return false;
+  }
+  if (typeof s.signedMessage !== 'string' || s.signedMessage.length === 0) {
+    return false;
+  }
+  if (typeof s.signerAddress !== 'string' || !isValidStellarAddress(s.signerAddress)) {
+    return false;
+  }
 
-  // Required numeric fields
-  if (typeof s.authenticatedAt !== 'number') return false;
-  if (typeof s.expiresAt !== 'number') return false;
+  // Required numeric timestamp fields
+  if (typeof s.authenticatedAt !== 'number' || s.authenticatedAt <= 0) {
+    return false;
+  }
+  if (typeof s.expiresAt !== 'number' || s.expiresAt <= 0) {
+    return false;
+  }
 
-  // Not expired
-  if (s.expiresAt <= Date.now()) return false;
+  // Check expiration
+  if (s.expiresAt <= Date.now()) {
+    return false;
+  }
 
   return true;
+}
+
+/** Parse and validate session from cookie */
+function getSessionFromCookie(request: NextRequest): boolean {
+  try {
+    const sessionCookie = request.cookies.get(SESSION_KEY);
+    if (!sessionCookie?.value) {
+      return false;
+    }
+
+    const decoded = decodeURIComponent(sessionCookie.value);
+    const session = JSON.parse(decoded);
+    
+    return isValidSession(session);
+  } catch (error) {
+    // Invalid JSON or malformed cookie
+    return false;
+  }
 }
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  const sessionCookie = request.cookies.get(SESSION_KEY);
-  let isAuthenticated = false;
-
-  if (sessionCookie) {
-    try {
-      const session = JSON.parse(decodeURIComponent(sessionCookie.value));
-      isAuthenticated = isValidSession(session);
-    } catch (e) {
-      console.error('Middleware: Error parsing session cookie', e);
-    }
+  // Skip middleware for static files and API routes
+  if (
+    pathname.startsWith('/_next') ||
+    pathname.startsWith('/api') ||
+    pathname.startsWith('/static') ||
+    pathname.includes('.')
+  ) {
+    return NextResponse.next();
   }
 
-  const isPublicRoute =
-    PUBLIC_ROUTES.includes(pathname) ||
-    pathname.startsWith('/_next') ||
-    pathname.includes('.');
+  const isAuthenticated = getSessionFromCookie(request);
+  const isPublicRoute = PUBLIC_ROUTES.some(route => pathname === route);
+  const isAuthRoute = AUTH_ROUTES.some(route => pathname === route);
 
-  if (!isAuthenticated && !isPublicRoute) {
+  // Redirect authenticated users away from auth pages
+  if (isAuthenticated && isAuthRoute) {
+    return NextResponse.redirect(new URL('/dashboard', request.url));
+  }
+
+  // Allow access to public routes
+  if (isPublicRoute) {
+    return NextResponse.next();
+  }
+
+  // Require authentication for protected routes
+  if (!isAuthenticated) {
     const signInUrl = new URL('/signin', request.url);
-    signInUrl.searchParams.set('callbackUrl', pathname);
-    signInUrl.searchParams.set('message', 'Please sign in to access this page');
+    signInUrl.searchParams.set('redirect', pathname);
     return NextResponse.redirect(signInUrl);
   }
 
-  if (isAuthenticated && AUTH_ROUTES.includes(pathname)) {
-    return NextResponse.redirect(new URL('/', request.url));
-  }
-
+  // Allow access to protected route
   return NextResponse.next();
 }
 
 export const config = {
   matcher: [
-    '/((?!api|_next/static|_next/image|favicon.ico).*)',
+    /*
+     * Match all request paths except:
+     * - _next/static (static files)
+     * - _next/image (image optimization files)
+     * - favicon.ico (favicon file)
+     * - public files (public folder)
+     */
+    '/((?!_next/static|_next/image|favicon.ico|.*\\..*|public).*)',
   ],
 };

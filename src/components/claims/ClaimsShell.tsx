@@ -2,7 +2,7 @@
 
 import { Sidebar } from "@/components/ui/Sidebar";
 import { Button } from "@/components/ui/Button";
-import { useAuth } from "@/components/auth-provider-enhanced";
+import { useAuth } from "@/components/auth-provider";
 import { useState } from "react";
 
 export default function ClaimsShell({

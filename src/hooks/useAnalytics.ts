@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import { analytics, EventCategory } from "@/lib/analytics";
-import { useAuth } from "@/components/auth-provider-enhanced";
+import { useAuth } from "@/components/auth-provider";
 
 export function useAnalytics() {
     let session = null;

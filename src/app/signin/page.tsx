@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMemo, useState, useEffect, Suspense } from "react";
 import { AuthShell } from "@/components/auth-shell";
-import { useAuth } from "@/components/auth-provider-enhanced";
+import { useAuth } from "@/components/auth-provider";
 import {
   connectFreighter,
   createAuthMessage,

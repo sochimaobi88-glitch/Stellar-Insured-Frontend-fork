@@ -1,6 +1,6 @@
 import React from 'react';
 import { render, waitFor } from '@testing-library/react';
-import { AuthProvider } from '../auth-provider-enhanced';
+import { AuthProvider } from '../auth-provider';
 import { secureStorage } from '@/lib/security';
 import { isConnected } from '@stellar/freighter-api';
 import { useWalletStore } from '@/store';

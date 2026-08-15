@@ -1,8 +1,16 @@
-import React, { useCallback } from 'react';
+import { useCallback, useEffect } from 'react';
 import { useWalletStore } from '@/store';
+import { AuthSession } from '@/store/types';
 import { connectFreighter, signFreighterMessage, createAuthMessage } from '@/lib/freighter';
 import { useWalletErrorHandler } from '@/hooks/useErrorHandler';
 import { errorHandler } from '@/lib/errorHandler';
+
+/**
+ * Wallet Connection Hook
+ * 
+ * Provides wallet connection functionality that integrates with the unified auth provider.
+ * Auth state is managed by AuthProvider; this hook handles connection flow only.
+ */
 
 export function useWallet() {
   const {
@@ -10,79 +18,134 @@ export function useWallet() {
     session,
     error,
     setStatus,
-    setSession,
     setError,
     signOut,
-    isAddressRegistered,
-    registerAddress,
-    getRegisteredUser,
     startConnection,
     completeConnection,
     failConnection,
   } = useWalletStore();
 
-
   const {
     executeWithErrorHandling,
-    handleError,
     showSuccessNotification,
     showErrorNotification,
-    retryLastOperation,
     hasError,
     canRetry
   } = useWalletErrorHandler();
 
-    // Session expiration watcher
-    React.useEffect(() => {
-      if (!session || !session.expiresAt) return;
-      const now = Date.now();
-      if (session.expiresAt <= now) {
-        signOut();
-        const appError = errorHandler.createError(
-          'AUTHENTICATION',
-          'SESSION_EXPIRED',
-          new Error('Session expired')
-        );
-        showErrorNotification?.(appError);
-        return;
-      }
-      // Set timer to auto sign out at expiration
-      const timeout = setTimeout(() => {
-        signOut();
-        const appError = errorHandler.createError(
-          'AUTHENTICATION',
-          'SESSION_EXPIRED',
-          new Error('Session expired')
-        );
-        showErrorNotification?.(appError);
-      }, session.expiresAt - now);
-      return () => clearTimeout(timeout);
-    }, [session, signOut, showErrorNotification]);
+  // ─── Session expiration watcher ─────────────────────────────────────────
+  useEffect(() => {
+    if (!session || !session.expiresAt) return;
+    
+    const now = Date.now();
+    if (session.expiresAt <= now) {
+      signOut();
+      const appError = errorHandler.createError(
+        'AUTHENTICATION',
+        'SESSION_EXPIRED',
+        new Error('Session expired')
+      );
+      showErrorNotification?.(appError);
+      return;
+    }
 
-  const connectWallet = useCallback(async () => {
-    if (session) return session;
+    // Set timer to auto sign out at expiration
+    const msUntilExpiry = session.expiresAt - now;
+    const timeout = setTimeout(() => {
+      signOut();
+      const appError = errorHandler.createError(
+        'AUTHENTICATION',
+        'SESSION_EXPIRED',
+        new Error('Your session has expired. Please sign in again.')
+      );
+      showErrorNotification?.(appError);
+    }, msUntilExpiry);
+
+    return () => clearTimeout(timeout);
+  }, [session?.expiresAt, signOut, showErrorNotification]);
+
+  // ─── Connect wallet and create session ──────────────────────────────────
+  const connectWallet = useCallback(async (): Promise<AuthSession> => {
+    // Return existing session if already connected
+    if (session) {
+      return session;
+    }
+
     return executeWithErrorHandling(async () => {
       startConnection();
+
+      // Request wallet access
       const address = await connectFreighter();
+
+      // Create auth message and sign it
       const { message } = createAuthMessage(address);
       setStatus('signing');
       const signed = await signFreighterMessage(address, message);
+
+      // Create new session
       const newSession: AuthSession = {
         address,
         signedMessage: signed.signedMessage,
         signerAddress: signed.signerAddress,
         authenticatedAt: Date.now(),
-        expiresAt: Date.now() + 86400000,
+        expiresAt: Date.now() + 24 * 60 * 60 * 1000, // 24 hours
       };
+
       completeConnection(newSession);
+      
+      if (showSuccessNotification) {
+        showSuccessNotification({
+          category: 'WALLET',
+          code: 'CONNECTION_SUCCESS',
+          message: 'Wallet connected successfully',
+          severity: 'info',
+          userMessage: 'Your wallet has been connected',
+          timestamp: Date.now()
+        });
+      }
+
       return newSession;
     }, 'WALLET');
-  }, [session, executeWithErrorHandling, startConnection, setStatus, completeConnection]);
+  }, [
+    session,
+    executeWithErrorHandling,
+    startConnection,
+    setStatus,
+    completeConnection,
+    showSuccessNotification
+  ]);
 
+  // ─── Disconnect wallet ───────────────────────────────────────────────────
   const disconnect = useCallback(() => {
     signOut();
-    rateLimiter.reset(); //  Clear queue on logout
-  }, [signOut]);
+    
+    if (showSuccessNotification) {
+      showSuccessNotification({
+        category: 'WALLET',
+        code: 'DISCONNECTION_SUCCESS',
+        message: 'Wallet disconnected',
+        severity: 'info',
+        userMessage: 'Your wallet has been disconnected',
+        timestamp: Date.now()
+      });
+    }
+  }, [signOut, showSuccessNotification]);
 
-  return { status, session, connectWallet, disconnect, address: session?.address };
+  return {
+    // Connection state
+    status,
+    session,
+    error,
+    hasError,
+    canRetry,
+    
+    // Actions
+    connectWallet,
+    disconnect,
+    
+    // Convenience
+    address: session?.address ?? null,
+    isConnected: status === 'connected' && !!session,
+    isConnecting: status === 'connecting' || status === 'signing',
+  };
 }

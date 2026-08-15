@@ -1,21 +1,24 @@
 "use client";
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useWalletStore } from "@/store";
+import { AuthSession, RegisteredUser } from "@/store/types";
+import { secureStorage } from "@/lib/security";
+import { isConnected } from "@stellar/freighter-api";
 import { validateSessionWallet, validateWalletFunded, validateSessionFields } from "@/lib/walletValidation";
 
-export type AuthSession = {
-  address: string;
-  signedMessage: string;
-  signerAddress: string;
-  authenticatedAt: number;
-  expiresAt: number;
-  refreshToken?: string;
-};
-
-export type RegisteredUser = {
-  createdAt: number;
-  email?: string;
-};
+/**
+ * Unified Authentication Provider
+ * 
+ * This provider consolidates:
+ * - Secure encrypted storage via src/lib/security.js
+ * - Freighter wallet integration via src/lib/freighter.ts
+ * - Session state management via walletStore
+ * - Periodic validation of wallet connection and funding
+ * - Cookie sync for middleware/SSR auth checks
+ * 
+ * Single source of truth for authentication state across the application.
+ */
 
 export type WalletWarning = "mismatch" | "unfunded" | null;
 
@@ -27,99 +30,112 @@ type AuthContextValue = {
   registerAddress: (address: string, user?: RegisteredUser) => void;
   getRegisteredUser: (address: string) => RegisteredUser | null;
   walletWarning: WalletWarning;
+  isInitializing: boolean;
 };
-
-const VALIDATION_INTERVAL_MS = 60_000; // validate every 60 seconds
-
-const SESSION_KEY = "stellar_insured_session";
-const USERS_KEY = "stellar_insured_users";
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-function safeParseJson<T>(value: string | null): T | null {
-  if (!value) return null;
-  try {
-    return JSON.parse(value) as T;
-  } catch {
-    return null;
-  }
-}
-
-function normalizeUsers(value: unknown): Record<string, RegisteredUser> {
-  if (!value) return {};
-  if (Array.isArray(value)) {
-    return value.reduce<Record<string, RegisteredUser>>((acc, address) => {
-      if (typeof address === "string") acc[address] = { createdAt: Date.now() };
-      return acc;
-    }, {});
-  }
-
-  if (typeof value === "object") {
-    const obj = value as Record<string, unknown>;
-    return Object.entries(obj).reduce<Record<string, RegisteredUser>>((acc, [k, v]) => {
-      if (typeof k !== "string") return acc;
-      if (typeof v === "object" && v) {
-        const vv = v as Partial<RegisteredUser>;
-        acc[k] = {
-          createdAt: typeof vv.createdAt === "number" ? vv.createdAt : Date.now(),
-          email: typeof vv.email === "string" ? vv.email : undefined,
-        };
-      } else {
-        acc[k] = { createdAt: Date.now() };
-      }
-      return acc;
-    }, {});
-  }
-
-  return {};
-}
-
-function readRegisteredUsers(): Record<string, RegisteredUser> {
-  if (typeof window === "undefined") return {};
-  const parsed = safeParseJson<unknown>(window.localStorage.getItem(USERS_KEY));
-  return normalizeUsers(parsed);
-}
-
-function writeRegisteredUsers(users: Record<string, RegisteredUser>): void {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(USERS_KEY, JSON.stringify(users));
-}
+const VALIDATION_INTERVAL_MS = 60_000; // Validate every 60 seconds
+const SESSION_KEY = "stellar_insured_session";
+const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [session, setSessionState] = useState<AuthSession | null>(null);
+  const {
+    session: storeSession,
+    setSession: setStoreSession,
+    signOut: storeSignOut,
+    isAddressRegistered,
+    registerAddress,
+    getRegisteredUser,
+  } = useWalletStore();
+
+  const [isInitializing, setIsInitializing] = useState(true);
   const [walletWarning, setWalletWarning] = useState<WalletWarning>(null);
   const sessionRef = useRef<AuthSession | null>(null);
 
+  // ─── 1. Initialize session from secure storage ───────────────────────────
   useEffect(() => {
-    const parsed = safeParseJson<AuthSession>(
-      typeof window === "undefined" ? null : window.localStorage.getItem(SESSION_KEY),
-    );
-    if (parsed && validateSessionFields(parsed)) {
-      setSessionState(parsed);
-      sessionRef.current = parsed;
-    }
-  }, []);
+    const restoreSession = async () => {
+      try {
+        const stored = secureStorage.getItem(SESSION_KEY);
+        if (!stored) {
+          setIsInitializing(false);
+          return;
+        }
 
-  /** Periodically validate wallet: check session fields, mismatch, and funded status */
+        const session = JSON.parse(stored) as AuthSession;
+
+        // Validate session fields and expiry
+        if (!validateSessionFields(session)) {
+          secureStorage.removeItem(SESSION_KEY);
+          storeSignOut();
+          setIsInitializing(false);
+          return;
+        }
+
+        // Validate Freighter connection
+        const connected = await isConnected();
+        if (!connected.isConnected || connected.error) {
+          secureStorage.removeItem(SESSION_KEY);
+          storeSignOut();
+          setIsInitializing(false);
+          return;
+        }
+
+        // Restore valid session
+        setStoreSession(session);
+        sessionRef.current = session;
+      } catch (error) {
+        console.error("Failed to restore session:", error);
+        secureStorage.removeItem(SESSION_KEY);
+        storeSignOut();
+      } finally {
+        setIsInitializing(false);
+      }
+    };
+
+    restoreSession();
+  }, [setStoreSession, storeSignOut]);
+
+  // ─── 2. Sync session to cookies and secure storage ──────────────────────
+  useEffect(() => {
+    if (isInitializing) return;
+
+    if (storeSession) {
+      // Persist to secure storage (encrypted)
+      secureStorage.setItem(SESSION_KEY, JSON.stringify(storeSession));
+
+      // Sync to cookie for middleware (HttpOnly would be better but requires server-side cookie setting)
+      const cookieValue = encodeURIComponent(JSON.stringify(storeSession));
+      const expires = new Date(Date.now() + SESSION_TTL_MS).toUTCString();
+      document.cookie = `${SESSION_KEY}=${cookieValue}; path=/; expires=${expires}; SameSite=Strict; Secure`;
+    } else {
+      // Clear session from storage and cookies
+      secureStorage.removeItem(SESSION_KEY);
+      document.cookie = `${SESSION_KEY}=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
+    }
+
+    sessionRef.current = storeSession;
+  }, [storeSession, isInitializing]);
+
+  // ─── 3. Periodic validation: wallet match, funding, expiry ──────────────
   useEffect(() => {
     async function runValidation() {
       const s = sessionRef.current;
       if (!s) return;
 
-      // Session expired or invalid fields → sign out
+      // Check session expiry
       if (!validateSessionFields(s)) {
-        setSessionState(null);
-        sessionRef.current = null;
-        if (typeof window !== "undefined") {
-          window.localStorage.removeItem(SESSION_KEY);
-          document.cookie = `${SESSION_KEY}=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
-        }
+        console.warn("Session expired or invalid, signing out");
+        storeSignOut();
+        setWalletWarning(null);
         return;
       }
 
       // Check wallet mismatch
       const walletResult = await validateSessionWallet(s);
       if (!walletResult.valid) {
+        console.warn("Wallet validation failed:", walletResult.error);
         setWalletWarning("mismatch");
         return;
       }
@@ -129,63 +145,65 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setWalletWarning(fundedResult.funded ? null : "unfunded");
     }
 
-    const id = setInterval(runValidation, VALIDATION_INTERVAL_MS);
-    // Run once on mount if session exists
-    runValidation();
-    return () => clearInterval(id);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const setSession = useCallback((next: AuthSession | null) => {
-    setSessionState(next);
-    sessionRef.current = next;
-    if (next) setWalletWarning(null);
-    if (typeof window === "undefined") return;
-    if (next) {
-      window.localStorage.setItem(SESSION_KEY, JSON.stringify(next));
-      // Sync to cookie for middleware access (expires in 24 hours)
-      const expires = new Date(Date.now() + 24 * 60 * 60 * 1000).toUTCString();
-      document.cookie = `${SESSION_KEY}=${encodeURIComponent(JSON.stringify(next))}; path=/; expires=${expires}; SameSite=Lax`;
-    } else {
-      window.localStorage.removeItem(SESSION_KEY);
-      document.cookie = `${SESSION_KEY}=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
+    if (!storeSession) {
+      setWalletWarning(null);
+      return;
     }
-  }, []);
+
+    // Run validation immediately on session change
+    runValidation();
+
+    // Then periodically
+    const intervalId = setInterval(runValidation, VALIDATION_INTERVAL_MS);
+    return () => clearInterval(intervalId);
+  }, [storeSession, storeSignOut]);
+
+  // ─── 4. Context API ──────────────────────────────────────────────────────
+  const setSession = useCallback(
+    (next: AuthSession | null) => {
+      if (next) {
+        setStoreSession(next);
+        setWalletWarning(null);
+      } else {
+        storeSignOut();
+        setWalletWarning(null);
+      }
+    },
+    [setStoreSession, storeSignOut]
+  );
 
   const signOut = useCallback(() => {
-    setSession(null);
-  }, [setSession]);
-
-  const isAddressRegistered = useCallback((address: string) => {
-    const users = readRegisteredUsers();
-    return Boolean(users[address]);
-  }, []);
-
-  const getRegisteredUser = useCallback((address: string) => {
-    const users = readRegisteredUsers();
-    return users[address] ?? null;
-  }, []);
-
-  const registerAddress = useCallback((address: string, user?: RegisteredUser) => {
-    const users = readRegisteredUsers();
-    if (users[address]) return;
-    writeRegisteredUsers({
-      ...users,
-      [address]: user ?? { createdAt: Date.now() },
-    });
-  }, []);
+    storeSignOut();
+    setWalletWarning(null);
+  }, [storeSignOut]);
 
   const value = useMemo<AuthContextValue>(
     () => ({
-      session,
+      session: storeSession,
       setSession,
       signOut,
       isAddressRegistered,
       registerAddress,
       getRegisteredUser,
       walletWarning,
+      isInitializing,
     }),
-    [session, setSession, signOut, isAddressRegistered, registerAddress, getRegisteredUser, walletWarning],
+    [
+      storeSession,
+      setSession,
+      signOut,
+      isAddressRegistered,
+      registerAddress,
+      getRegisteredUser,
+      walletWarning,
+      isInitializing,
+    ]
   );
+
+  // Prevent hydration mismatch by showing nothing during initialization
+  if (isInitializing) {
+    return null;
+  }
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

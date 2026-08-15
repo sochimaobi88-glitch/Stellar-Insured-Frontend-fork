@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import { AuthStatusIndicator } from './AuthStatusIndicator';
-import { AuthProvider } from './auth-provider-enhanced';
+import { AuthProvider } from './auth-provider';
 
 describe('AuthStatusIndicator', () => {
   beforeEach(() => {
