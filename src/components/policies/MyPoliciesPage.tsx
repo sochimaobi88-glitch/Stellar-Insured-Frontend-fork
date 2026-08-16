@@ -14,6 +14,7 @@ import { ProtectedRoute } from "@/components/protected-route";
 import type { Policy } from "@/services/types/policy.types";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { PolicyCardSkeleton, EmptyState, ErrorState } from "@/components/ui/SkeletonLoaders";
+import { blockchainEvents } from "@/lib/blockchainEvents";
 
 export default function MyPoliciesPage() {
   const { trackAction } = useAnalytics();
@@ -28,10 +29,9 @@ export default function MyPoliciesPage() {
 
   const itemsPerPage = 9;
 
-  useEffect(() => {
-    const loadPolicies = async () => {
+  const loadPolicies = React.useCallback(async (background = false) => {
       try {
-        setLoading(true);
+        if (!background) setLoading(true);
         const result = await policyService.getPolicies();
         if (result.success) {
           setPolicies(result.data.policies);
@@ -41,12 +41,14 @@ export default function MyPoliciesPage() {
       } catch {
         setError("Failed to load policies");
       } finally {
-        setLoading(false);
+        if (!background) setLoading(false);
       }
-    };
+    }, []);
 
-    loadPolicies();
-  }, []);
+  useEffect(() => { void loadPolicies(); }, [loadPolicies]);
+  useEffect(() => blockchainEvents.subscribe(() => { void loadPolicies(true); }, [
+    'policy.purchased', 'policy.updated',
+  ]), [loadPolicies]);
 
   const filteredPolicies = useMemo(() => {
     return policies.filter((policy) => {
@@ -77,22 +79,7 @@ export default function MyPoliciesPage() {
 
   const handleRetry = () => {
     setError(null);
-    const loadPolicies = async () => {
-      try {
-        setLoading(true);
-        const result = await policyService.getPolicies();
-        if (result.success) {
-          setPolicies(result.data.policies);
-        } else {
-          setError(result.error || "Failed to load policies");
-        }
-      } catch {
-        setError("Failed to load policies");
-      } finally {
-        setLoading(false);
-      }
-    };
-    loadPolicies();
+    void loadPolicies();
   };
 
   const counts = {

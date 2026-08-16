@@ -11,6 +11,7 @@ import { getProposalStats } from "@/lib/dao-utils";
 import { useTransactionHandler } from "@/hooks/useTransactionHandler";
 import { useNotificationContext } from "@/context/NotificationContext";
 import { ProposalCardSkeleton, EmptyState, ErrorState } from "@/components/ui/SkeletonLoaders";
+import { blockchainEvents } from "@/lib/blockchainEvents";
 
 interface DAOVotingClientProps {
   initialProposals: Proposal[];
@@ -29,6 +30,15 @@ export default function DAOVotingClient({
     showSuccessToast: false,
   });
   const { addNotification } = useNotificationContext();
+
+  useEffect(() => blockchainEvents.subscribe((event) => {
+    const incoming = (event.data.proposal ?? event.data) as Partial<Proposal>;
+    const id = event.resourceId ?? incoming.id;
+    if (!id) return;
+    setProposals(current => current.map(proposal => proposal.id === id
+      ? { ...proposal, ...incoming }
+      : proposal));
+  }, ['proposal.updated', 'vote.cast']), []);
 
   // Simulate initial loading if no proposals provided
   useEffect(() => {

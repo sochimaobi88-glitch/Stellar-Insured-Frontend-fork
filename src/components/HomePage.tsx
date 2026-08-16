@@ -9,11 +9,13 @@ import FeaturePageSectionThree from "@/components/FeaturePageSectionThree";
 import SecureAsset from "@/components/SecureAsset";
 import NavBar from "@/components/NavBar/NavBar";
 import Footer from "@/components/footer";
+import { RealtimeStatus } from "@/components/RealtimeStatus";
 
 export default function HomePage() {
   return (
     <div className="flex min-h-screen flex-col bg-white dark:bg-zinc-950 relative">
       <NavBar />
+      <RealtimeStatus className="absolute right-4 top-20 z-10" />
       <main className="flex flex-col">
         <HeroSection />
         <SecureAsset />
