@@ -1,6 +1,6 @@
 import React from 'react';
 import { render, waitFor } from '@testing-library/react';
-import { AuthProvider } from '../auth-provider-enhanced';
+import { AuthProvider } from '../auth-provider';
 import { secureStorage } from '@/lib/security';
 import { isConnected } from '@stellar/freighter-api';
 import { useWalletStore } from '@/store';
@@ -56,7 +56,10 @@ describe('AuthProvider Persistence', () => {
 
   it('restores valid unexpired session if Freighter is connected', async () => {
     const validSession = {
-      address: 'GABC...',
+      address: 'GABC123456789012345678901234567890123456789012345678',
+      signedMessage: 'test-signature',
+      signerAddress: 'GABC123456789012345678901234567890123456789012345678',
+      authenticatedAt: Date.now() - 10000,
       expiresAt: Date.now() + 100000,
     };
     
@@ -66,7 +69,7 @@ describe('AuthProvider Persistence', () => {
     render(<AuthProvider><div>App</div></AuthProvider>);
 
     await waitFor(() => {
-      expect(secureStorage.getItem).toHaveBeenCalledWith('wallet_session');
+      expect(secureStorage.getItem).toHaveBeenCalledWith('stellar_insured_session');
       expect(isConnected).toHaveBeenCalled();
       const { setSession } = useWalletStore();
       expect(setSession).toHaveBeenCalledWith(validSession);
@@ -75,7 +78,10 @@ describe('AuthProvider Persistence', () => {
 
   it('clears session and signs out if Freighter is not connected', async () => {
     const validSession = {
-      address: 'GABC...',
+      address: 'GABC123456789012345678901234567890123456789012345678',
+      signedMessage: 'test-signature',
+      signerAddress: 'GABC123456789012345678901234567890123456789012345678',
+      authenticatedAt: Date.now() - 10000,
       expiresAt: Date.now() + 100000,
     };
     
@@ -86,7 +92,7 @@ describe('AuthProvider Persistence', () => {
 
     await waitFor(() => {
       expect(isConnected).toHaveBeenCalled();
-      expect(secureStorage.removeItem).toHaveBeenCalledWith('wallet_session');
+      expect(secureStorage.removeItem).toHaveBeenCalledWith('stellar_insured_session');
       const { signOut } = useWalletStore();
       expect(signOut).toHaveBeenCalled();
     });
@@ -94,7 +100,10 @@ describe('AuthProvider Persistence', () => {
 
   it('clears session and signs out if session is expired', async () => {
     const expiredSession = {
-      address: 'GABC...',
+      address: 'GABC123456789012345678901234567890123456789012345678',
+      signedMessage: 'test-signature',
+      signerAddress: 'GABC123456789012345678901234567890123456789012345678',
+      authenticatedAt: Date.now() - 200000,
       expiresAt: Date.now() - 100000, // Expired
     };
     
@@ -104,7 +113,7 @@ describe('AuthProvider Persistence', () => {
 
     await waitFor(() => {
       expect(isConnected).not.toHaveBeenCalled();
-      expect(secureStorage.removeItem).toHaveBeenCalledWith('wallet_session');
+      expect(secureStorage.removeItem).toHaveBeenCalledWith('stellar_insured_session');
       const { signOut } = useWalletStore();
       expect(signOut).toHaveBeenCalled();
     });

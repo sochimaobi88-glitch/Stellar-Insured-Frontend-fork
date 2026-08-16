@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import SignInPage from '@/app/signin/page';
-import { AuthProvider } from '@/components/auth-provider-enhanced';
+import { AuthProvider } from '@/components/auth-provider';
 import { ToastProvider } from '@/components/ui/toast';
 import * as freighterApi from '@stellar/freighter-api';
 

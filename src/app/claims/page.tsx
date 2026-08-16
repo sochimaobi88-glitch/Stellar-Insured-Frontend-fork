@@ -5,7 +5,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/Button";
 import { Plus } from "lucide-react";
 import { ProtectedRoute } from "@/components/protected-route";
-import { useAuth } from "@/components/auth-provider-enhanced";
+import { useAuth } from "@/components/auth-provider";
 import { useWallet } from "@/hooks/useWallet";
 import { ClaimTrackingDashboard } from "@/components/claims/ClaimTrackingDashboard";
 import { WalletStatus } from "@/components/WalletStatus";

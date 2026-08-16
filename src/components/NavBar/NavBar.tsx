@@ -1,7 +1,7 @@
 'use client';
 import logo from '@/components/logo.png'
 import Link from 'next/link';
-import { useAuth } from '../auth-provider-enhanced';
+import { useAuth } from '../auth-provider';
 import { useWallet } from '@/hooks/useWallet';
 import { useState, useEffect } from 'react';
 import { usePathname } from 'next/navigation';
