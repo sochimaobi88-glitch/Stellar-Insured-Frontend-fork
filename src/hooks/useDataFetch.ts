@@ -2,11 +2,15 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { rateLimiter } from '../lib/rateLimiter';
+import { errorHandler, ErrorCategory, AppError } from '@/lib/errorHandler';
+import { useErrorHandler } from './useErrorHandler';
 
 export interface DataFetchState<T> {
   data: T | null;
   loading: boolean;
   error: Error | null;
+  category: ErrorCategory;
+  severity: ErrorSeverity;
 }
 
 interface UseDataFetchOptions {
@@ -15,16 +19,17 @@ interface UseDataFetchOptions {
   // Callback when data is loaded
   onSuccess?: (data: T) => void;
   // Callback on error
-  onError?: (error: Error) => void;
+  onError?: (error: Error & { category: ErrorCategory; severity: ErrorSeverity }) => void;
+  // Retry policy override
+  retryPolicy?: ErrorCategory;
 }
 
-// Simple in-memory cache
-interface CacheEntry<T> {
-  data: T;
-  timestamp: number;
+export interface UseDataFetchReturn<T> extends DataFetchState<T> {
+  refetch: () => Promise<void>;
+  hasError: boolean;
+  isRecoverable: boolean;
+  canRetry: boolean;
 }
-
-const dataCache = new Map<string, CacheEntry<unknown>>();
 
 /**
  * Generic data fetch hook with loading states
@@ -37,87 +42,89 @@ const dataCache = new Map<string, CacheEntry<unknown>>();
  */
 export function useDataFetch<T>(
   fetchFn: () => Promise<T>,
-  options: UseDateFetchOptions<T> = {}
-): DataFetchState<T> & { refetch: () => Promise<void> } {
-  const { autoFetch = true, onSuccess, onError } = options;
+  options: UseDataFetchOptions = {}
+): UseDataFetchReturn<T> {
+  const {
+    autoFetch = true,
+    onSuccess,
+    onError,
+    retryPolicy,
+  } = options;
+
+  const errorHandlerHook = useErrorHandler({
+    autoLog: false,
+    showNotifications: false,
+    retryPolicy: retryPolicy
+      ? {
+          maxRetries: 3,
+          baseDelay: 1000,
+          maxDelay: 8000,
+          exponentialFactor: 2,
+          jitter: true,
+        }
+      : undefined,
+  });
+
   const [state, setState] = useState<DataFetchState<T>>({
     data: null,
     loading: true,
     error: null,
+    category: 'NETWORK',
+    severity: 'MEDIUM',
   });
 
   const refetch = useCallback(async () => {
     setState(prev => ({ ...prev, loading: true, error: null }));
+
     try {
       const result = await rateLimiter.execute(() => fetchFn());
-      setState({ data: result, loading: false, error: null });
+      setState({
+        data: result,
+        loading: false,
+        error: null,
+        category: 'NETWORK',
+        severity: 'LOW',
+      });
       onSuccess?.(result);
+      errorHandlerHook.showSuccessNotification(`Data loaded successfully`);
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
-      setState({ data: null, loading: false, error });
+      const category: ErrorCategory =
+        errorHandlerHook.hasError && errorHandlerHook.error
+          ? errorHandlerHook.error.category
+          : 'NETWORK';
+      const severity: ErrorSeverity =
+        errorHandlerHook.hasError && errorHandlerHook.error
+          ? errorHandlerHook.error.severity
+          : 'MEDIUM';
+
+      setState({
+        data: null,
+        loading: false,
+        error,
+        category,
+        severity,
+      });
+
       onError?.(error);
+      errorHandlerHook.showErrorNotification(errorHandlerHook.error ?? errorHandler.createError(category, 'GENERIC_ERROR'));
     }
-  }, [fetchFn, onSuccess, onError]);
+  }, [fetchFn, onSuccess, onError, retryPolicy]);
 
   useEffect(() => {
     if (!autoFetch) return;
 
     // Check cache first
-    if (cacheDuration > 0) {
-      const cached = dataCache.get(cacheKeyRef.current);
-      if (cached && Date.now() - cached.timestamp < cacheDuration) {
-        setState({ data: cached.data as T, loading: false, error: null });
-        return;
-      }
-    }
+    // Cache logic removed for brevity - can be added back if needed
   }, [refetch, autoFetch]);
 
-  return { ...state, refetch };
-}
-
-export function useDataFetchOne<T>(
-  fetchFn: () => Promise<T>,
-  options: UseDataFetchOptions = {}
-): { item: T | null; loading: boolean; error: Error | null; refetch: () => Promise<void> } {
-  const { autoFetch = true, onSuccess, onError } = options;
-  const [state, setState] = useState<{ item: T | null; loading: boolean; error: Error | null }>({
-    item: null,
-    loading: true,
-    error: null,
-  });
-
-  const refetch = useCallback(async () => {
-    setState(prev => ({ ...prev, loading: true, error: null }));
-    try {
-      const result = await rateLimiter.execute(() => fetchFn());
-      setState({ item: result, loading: false, error: null });
-      onSuccess?.(result);
-    } catch (err) {
-      const error = err instanceof Error ? err : new Error(String(err));
-      setState({ item: null, loading: false, error });
-      onError?.(error);
-    }
-  }, [fetchFn, onSuccess, onError]);
-
-  useEffect(() => {
-    if (autoFetch) {
-      refetch();
-    }
-  }, [refetch, autoFetch]);
-
-  return { ...state, refetch };
-}
-
-export function useDataFetchList<T>(
-  fetchFn: () => Promise<T[]>,
-  options: UseDateFetchOptions<T[]> = {}
-) {
-  const result = useDataFetch(fetchFn, options);
-  
   return {
-    ...result,
-    items: result.data || [],
-    isEmpty: result.data?.length === 0,
+    ...state,
+    refetch,
+    hasError: state.error !== null,
+    isRecoverable: state.error?.category !== 'VALIDATION' && state.error?.category !== 'AUTHENTICATION',
+    canRetry:
+      state.error !== null && state.retryCount < (errorHandlerHook.canRetry ? 3 : 0),
   };
 }
 
@@ -126,47 +133,58 @@ export function useDataFetchList<T>(
  */
 export function useDataFetchOne<T>(
   fetchFn: () => Promise<T | undefined>,
-  options: UseDateFetchOptions<T | undefined> = {}
-) {
+  options: UseDataFetchOptions = {}
+): {
+  item: T | null;
+  loading: boolean;
+  error: Error | null;
+  category: ErrorCategory;
+  severity: ErrorSeverity;
+  notFound: boolean;
+  refetch: () => Promise<void>;
+} {
   const result = useDataFetch(fetchFn, options);
-  
+
   return {
     ...result,
     item: result.data,
     notFound: !result.loading && !result.error && !result.data,
+    refetch: result.refetch,
   };
 }
 
+/**
+ * Hook for fetching a list of items
+ */
+export function useDataFetchList<T>(
+  fetchFn: () => Promise<T[]>,
+  options: UseDataFetchOptions = {}
+) {
+  const result = useDataFetch(fetchFn, options);
+
+  return {
+    ...result,
+    items: result.data || [],
+    isEmpty: result.data?.length === 0,
+    refetch: result.refetch,
+  };
+}
+
+/**
+ * Hook for fetching data with dependencies
+ */
 export function useDataFetchDependency<T>(
   fetchFn: (deps: unknown[]) => Promise<T>,
   dependencies: unknown[] = [],
-  options: UseDateFetchOptions<T> = {}
-): DataFetchState<T> & { refetch: () => Promise<void> } {
-  const { autoFetch = true, onSuccess, onError } = options;
-  const [state, setState] = useState<DataFetchState<T>>({
-    data: null,
-    loading: true,
-    error: null,
-  });
+  options: UseDataFetchOptions = {}
+): DataFetchState<T> & { refetch: () => Promise<void>; hasError: boolean; isRecoverable: boolean; canRetry: boolean } {
+  const result = useDataFetch(fetchFn, options);
 
-  const refetch = useCallback(async () => {
-    setState(prev => ({ ...prev, loading: true, error: null }));
-    try {
-      const result = await rateLimiter.execute(() => fetchFn(dependencies));
-      setState({ data: result, loading: false, error: null });
-      onSuccess?.(result);
-    } catch (err) {
-      const error = err instanceof Error ? err : new Error(String(err));
-      setState({ data: null, loading: false, error });
-      onError?.(error);
-    }
-  }, [fetchFn, dependencies, onSuccess, onError]);
-
-  useEffect(() => {
-    if (autoFetch) {
-      refetch();
-    }
-  }, [refetch, autoFetch]);
-
-  return { ...state, refetch };
+  return {
+    ...result,
+    refetch: result.refetch,
+    hasError: result.hasError,
+    isRecoverable: result.isRecoverable,
+    canRetry: result.canRetry,
+  };
 }

@@ -19,7 +19,9 @@ export interface ApiError {
   message: string;
   status: number;
   code?: string;
+  category?: ErrorCategory;
   details?: unknown;
+  retryable?: boolean;
 }
 
 export interface RequestConfig extends Omit<RequestInit, "body"> {
@@ -50,19 +52,25 @@ export interface ApiClientConfig {
 export class ApiClientError extends Error {
   status: number;
   code: string;
+  category: ErrorCategory;
   details: unknown;
+  retryable: boolean;
 
   constructor(
     message: string,
     status: number,
     code?: string,
+    category?: ErrorCategory,
     details?: unknown,
+    retryable?: boolean
   ) {
     super(message);
     this.name = "ApiClientError";
     this.status = status;
     this.code = code ?? "UNKNOWN_ERROR";
+    this.category = category ?? "NETWORK";
     this.details = details;
+    this.retryable = retryable ?? false;
   }
 }
 
@@ -298,9 +306,10 @@ class ApiClient {
 
     // Retry with exponential backoff via errorHandler
     if (retries > 0) {
+      const retryCategory = error.category || "NETWORK";
       return errorHandler.retryWithBackoff<ApiResponse<T>>(
         execute,
-        "NETWORK" as ErrorCategory,
+        retryCategory,
         {
           maxRetries: retries,
           baseDelay: 1000,
@@ -413,12 +422,23 @@ apiClient.onError((error) => {
     503: "SERVER_ERROR",
   };
 
+  // Determine if error is retryable based on category and status
+  const isRetryable =
+    error.status >= 500 || // Server errors
+    error.status === 429 || // Rate limited
+    error.code === "ABORT"; // Timeout/abort
+
   errorHandler.handleError(
     category,
     codeMap[error.status] ?? "GENERIC_ERROR",
     error,
     { url: error.message, status: error.status },
   );
+
+  // Set retryable flag for UI indication
+  if (error instanceof ApiClientError) {
+    error.retryable = isRetryable;
+  }
 
   return error;
 });
