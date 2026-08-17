@@ -14,7 +14,8 @@ export default function HomePage() {
   return (
     <div className="flex min-h-screen flex-col bg-white dark:bg-zinc-950 relative">
       <NavBar />
-      <main className="flex flex-col">
+      {/* id="main-content" is the skip-link target from layout.tsx */}
+      <main id="main-content" className="flex flex-col" tabIndex={-1}>
         <HeroSection />
         <SecureAsset />
         <HowItWorksSection />
