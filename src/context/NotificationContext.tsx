@@ -1,8 +1,10 @@
 "use client";
 
-import React, { createContext, useContext, useCallback, useState } from "react";
+import React, { createContext, useContext, useCallback, useEffect } from "react";
 import { useToast } from "@/components/ui/toast";
-import { errorHandler } from "@/lib/errorHandler";
+import type { AppError, ErrorCategory } from "@/lib/errorHandler";
+import { blockchainEvents, type BlockchainEvent } from "@/lib/blockchainEvents";
+import { useWalletStore } from "@/store";
 
 type NotificationType = "success" | "error" | "warning" | "info";
 
@@ -29,6 +31,26 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
   const { showToast } = useToast();
+  const address = useWalletStore((state) => state.session?.address);
+
+  useEffect(() => {
+    if (address) blockchainEvents.start(address);
+    else blockchainEvents.stop();
+    return () => blockchainEvents.stop();
+  }, [address]);
+
+  useEffect(() => blockchainEvents.subscribe((event: BlockchainEvent) => {
+    const messages: Partial<Record<BlockchainEvent['type'], string>> = {
+      'policy.purchased': 'Your policy purchase was confirmed on-chain.',
+      'policy.updated': 'One of your policies was updated on-chain.',
+      'claim.submitted': 'Your claim submission was confirmed on-chain.',
+      'claim.updated': 'The status of one of your claims changed.',
+      'proposal.updated': 'A governance proposal status changed.',
+      'vote.cast': 'New voting results are available.',
+    };
+    const message = messages[event.type];
+    if (message) showToast(message, event.type.endsWith('purchased') || event.type.endsWith('submitted') ? 'success' : 'info');
+  }), [showToast]);
   // Holds the latest polite live-region message; reset after a short delay
   // so the same message can be re-announced if needed.
   const [liveAnnouncement, setLiveAnnouncement] = useState<string>("");
@@ -58,9 +80,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({
       // Critical errors are logged, not shown as toast
       if (error.severity === 'CRITICAL') {
         // Send to monitoring endpoint
-        errorHandler.sendToMonitoringEndpoint(error).catch(() => {
-          // Silently fail
-        });
+        console.error('[Critical application error]', error);
         return;
       }
 

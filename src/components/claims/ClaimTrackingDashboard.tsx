@@ -109,7 +109,10 @@ export const ClaimTrackingDashboard: React.FC<ClaimTrackingDashboardProps> = ({
   // Fetch claims with loading state
   const { items: claims, loading, error, refetch } = useDataFetchList(
     () => DataService.getClaims(),
-    { cacheDuration: 5 * 60 * 1000 } // Cache for 5 minutes
+    {
+      cacheDuration: 5 * 60 * 1000,
+      eventTypes: ['claim.submitted', 'claim.updated'],
+    }
   );
 
   const filteredClaims = claims
